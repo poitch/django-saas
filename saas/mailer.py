@@ -2,7 +2,7 @@ from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 
 
-def send_multi_mail(self, subject_template_name, email_template_name,
+def send_multi_mail(subject_template_name, email_template_name,
                     context, from_email, to_email, html_email_template_name=None):
     """
     Send a django.core.mail.EmailMultiAlternatives to `to_email`.
