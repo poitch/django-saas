@@ -9,9 +9,11 @@ from django.contrib.auth import login, get_user_model
 from django.http import HttpResponse, Http404
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse_lazy
+from django.utils.decorators import method_decorator
 from django.utils.encoding import force_text
 from django.utils.http import urlsafe_base64_decode
 from django.utils.translation import gettext_lazy as _
+from django.views.decorators.csrf import csrf_exempt
 from django.views.generic.base import View, TemplateView
 from django.views.generic.edit import FormView
 from saas.forms import CreateUserForm
@@ -19,6 +21,11 @@ from saas.mailer import send_multi_mail
 from saas.models import StripeInfo, BillingEvent, StripeEvent
 
 User = get_user_model()
+
+class CsrfExemptMixin(object):
+    @method_decorator(csrf_exempt)
+    def dispatch(self, *args, **kwargs):
+        return super(CsrfExemptMixin, self).dispatch(*args, **kwargs)
 
 
 class RegisterView(FormView):
@@ -179,7 +186,7 @@ class SubscribeView(LoginRequiredMixin, StripeViewMixin, View):
         return redirect(self.success_url)
 
 
-class StripeWebhook(View):
+class StripeWebhook(View, CsrfExemptMixin):
     from_email = None
     # Payment Succeeded
     payment_succeeded_email_template_name = None
@@ -398,9 +405,7 @@ class CancelSubscriptionView(LoginRequiredMixin, StripeViewMixin, View):
     def get(self, request):
         _, _, subscription = self.stripe_customer_card_subscription(self.request.user)
         if subscription is not None:
-            cancel_at_period_end = True
-            if hasattr(settings, 'SUBSCRIPTION_CANCEL_AT_PERIOD_END'):
-                cancel_at_period_end = settings.SUBSCRIPTION_CANCEL_AT_PERIOD_END
+            cancel_at_period_end = settings.SAAS_CANCEL_SUBSCRIPTION_AT_PERIOD_END if hasattr(settings, 'SAAS_CANCEL_SUBSCRIPTION_AT_PERIOD_END') else False
             if cancel_at_period_end:
                 result = self.stripe.Subscription.modify(
                     subscription['id'],
