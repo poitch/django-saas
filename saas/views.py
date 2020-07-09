@@ -1,3 +1,4 @@
+import logging
 import stripe
 
 from datetime import datetime
@@ -19,8 +20,11 @@ from django.views.generic.edit import FormView
 from saas.forms import CreateUserForm
 from saas.mailer import send_multi_mail
 from saas.models import StripeInfo, BillingEvent, StripeEvent
+from saas.subscription import Customer
 
 User = get_user_model()
+
+logger = logging.getLogger("saas")
 
 class CsrfExemptMixin(object):
     @method_decorator(csrf_exempt)
@@ -92,54 +96,12 @@ class ActivateView(View):
         return redirect(self.failure_url)
 
 
-class StripeViewMixin:
-    @property
-    def stripe(self):
-        stripe.api_key = settings.STRIPE_API_KEY
-        return stripe
-
-    def stripe_customer_for_user(self, user):
-        try:
-            info = user.stripeinfo
-            try:
-                customer = stripe.Customer.retrieve(info.customer_id)
-                if 'deleted' not in customer:
-                    return customer
-            except stripe.error.InvalidRequestError:
-                pass
-        except User.stripeinfo.RelatedObjectDoesNotExist:
-            pass
-        return self.stripe_customer_by_email(user.email)
-
-    def stripe_customer_by_email(self, email):
-        results = self.stripe.Customer.list(
-            email=email,
-        )
-        for customer in results['data']:
-            if 'deleted' not in customer:
-                return customer
-        return None
-
-    def stripe_customer_card_subscription(self, user):
-        customer = self.stripe_customer_for_user(user)
-        card = None
-        subscription = None
-        if customer is None:
-            return None, None, None
-        if len(customer['sources']['data']) > 0:
-            card = customer['sources']['data'][0]
-        if len(customer['subscriptions']['data']) > 0:
-            subscription = customer['subscriptions']['data'][0]
-        return customer, card, subscription
-
-
-
-class SubscribeView(LoginRequiredMixin, StripeViewMixin, View):
+class SubscribeView(LoginRequiredMixin, View):
     template_name = 'subscription/subscribe.html'
     success_url = reverse_lazy('index')
 
     def get(self, request, *args, **kwargs):
-        plans = self.stripe.Plan.list()
+        plans = stripe.Plan.list()
         context = {}
         context['plans'] = plans
         context['STRIPE_PUBLISHABLE_API_KEY'] = settings.STRIPE_PUBLISHABLE_API_KEY
@@ -147,37 +109,24 @@ class SubscribeView(LoginRequiredMixin, StripeViewMixin, View):
 
     def post(self, request, *args, **kwargs):
         token = request.POST.get('stripeToken', None)
-        customer = self.stripe_customer_by_email(request.user.email)
-        if customer is not None:
-            customer = self.stripe.Customer.modify(
-                customer['id'],
-                source=token,
-            )
-        else:
-            customer = self.stripe.Customer.create(
-                source=token,
-                email=request.user.email,
-            )
-        subscription = self.stripe.Subscription.create(
-            customer=customer['id'],
+        info = request.user.stripeinfo
+        # Set default payment method
+        customer = stripe.Customer.modify(
+            info.customer_id,
+            source=token,
+        )
+        # Subscribe Customer
+        subscription = stripe.Subscription.create(
+            customer=info.customer_id,
             trial_from_plan=True,
             items=[
                 {
                     "plan": request.POST.get('plan'),
                 }
-            ]
+            ],
+            expand=['latest_invoice.payment_intent'],
         )
-
-        info = None
-        try:
-            info = StripeInfo.objects.get(user=request.user)
-            info.customer_id = customer['id']
-        except StripeInfo.DoesNotExist:
-            info = StripeInfo.objects.create(
-                user=request.user,
-                customer_id=customer['id']
-            )
-
+        # Update subscription information
         info.subscription_id = subscription['id']
         info.subscription_end = datetime.fromtimestamp(
             int(subscription['current_period_end']))
@@ -234,7 +183,9 @@ class StripeWebhook(View, CsrfExemptMixin):
                 info = StripeInfo.objects.get(customer_id=customer_id)
                 user = info.user
             except StripeInfo.DoesNotExist:
-                pass
+                # Ignore the event
+                logger.warn('Ignoring StripeEvent for unknown customer {}'.format(customer_id))
+                return HttpResponse(status=200)
 
         # Record Event
         StripeEvent.objects.create(
@@ -264,28 +215,26 @@ class StripeWebhook(View, CsrfExemptMixin):
                 self.on_payment_failed(request, user, billing, stripe_object)
         elif event['type'] == 'invoice.payment_action_required':
             if user is not None:
-                pass
                 self.on_payment_action_required(request, user, stripe_object)
         elif event['type'] == 'invoice.incoming':
             if user is not None:
-                pass
                 self.on_invoice_incoming(request, user, stripe_object)
         elif event['type'] == 'customer.subscription.updated':
-            if user is not None:
+            if info is not None:
                 info.subscription_id = stripe_object['id']
                 info.subscription_end = stripe_object['current_period_end']
                 info.save()
         elif event['type'] == 'customer.subscription.trial_will_end':
-            # Need to update user
+            # TODO send an email
             pass
         elif event['type'] == 'customer.subscription.deleted':
             # Need to update user
-            if user is not None:
+            if info is not None:
                 info.subscription_id = None
                 info.subscription_end = None
                 info.save()
         elif event['type'] == 'customer.subscription.created':
-            if user is not None:
+            if info is not None:
                 info.subscription_id = stripe_object['id']
                 info.subscription_end = stripe_object['current_period_end']
                 info.save()
@@ -365,7 +314,7 @@ class BillingView(View):
         return render(request, self.template_name, context)
 
 
-class UpdatePaymentView(LoginRequiredMixin, StripeViewMixin, View):
+class UpdatePaymentView(LoginRequiredMixin, View):
     template_name = 'subscription/update_payment.html'
     success_url = reverse_lazy('index')
 
@@ -375,22 +324,50 @@ class UpdatePaymentView(LoginRequiredMixin, StripeViewMixin, View):
         return render(request, self.template_name, context)
 
     def post(self, request, *args, **kwargs):
-        customer = self.stripe_customer_for_user(request.user)
-        if customer is not None:
-            customer = self.stripe.Customer.modify(
-                customer['id'],
-                source=request.POST.get('stripeToken')
-            )
-            self.stripe.Subscription.modify(
-                request.user.stripeinfo.subscription_id,
-                default_source=customer['sources']['data'][0]['id'],
-            )
+        info = request.user.stripeinfo
+        customer = stripe.Customer.modify(
+            info.customer_id,
+            source=request.POST.get('stripeToken')
+        )
+        stripe.Subscription.modify(
+            info.subscription_id,
+            default_source=customer['sources']['data'][0]['id'],
+        )
         return redirect(self.success_url)
 
-class SubscriptionView(LoginRequiredMixin, StripeViewMixin, TemplateView):
+class UpdatePlanView(LoginRequiredMixin, View):
+    template_name = 'subscription/update_plan.html'
+    success_url = reverse_lazy('index')
+
+    def get(self, request, *args, **kwargs):
+        context = {}
+        context['STRIPE_PUBLISHABLE_API_KEY'] = settings.STRIPE_PUBLISHABLE_API_KEY
+        return render(request, self.template_name, context)
+
+    def post(self, request, *args, **kwargs):
+        info = request.user.stripeinfo
+        stripe.Subscription.modify(
+            info.subscription_id,
+            cancel_at_period_end=False,
+            items=[
+                {
+                    "plan": request.POST.get('plan'),
+                }
+            ],
+            expand=['latest_invoice.payment_intent'],
+        )
+
+class SubscriptionView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        customer, card, subscription = self.stripe_customer_card_subscription(self.request.user)
+        info = self.request.user.stripeinfo
+        customer = Customer.stripe().Customer.retrieve(info.customer_id)
+        card = None
+        subscription = None
+        if len(customer['sources']['data']) > 0:
+            card = customer['sources']['data'][0]
+        if len(customer['subscriptions']['data']) > 0:
+            subscription = customer['subscriptions']['data'][0]
         for billing in BillingEvent.objects.filter(user=self.request.user).order_by('-created_at'):
             context['billing'].append(billing)
 
@@ -399,19 +376,19 @@ class SubscriptionView(LoginRequiredMixin, StripeViewMixin, TemplateView):
         context['subscription'] = subscription
         return context
 
-class CancelSubscriptionView(LoginRequiredMixin, StripeViewMixin, View):
+class CancelSubscriptionView(LoginRequiredMixin, View):
     success_url = reverse_lazy('index')
 
     def get(self, request):
-        _, _, subscription = self.stripe_customer_card_subscription(self.request.user)
-        if subscription is not None:
+        info = request.user.stripeinfo
+        if info.subscription_id is not None:
             cancel_at_period_end = settings.SAAS_CANCEL_SUBSCRIPTION_AT_PERIOD_END if hasattr(settings, 'SAAS_CANCEL_SUBSCRIPTION_AT_PERIOD_END') else False
             if cancel_at_period_end:
-                result = self.stripe.Subscription.modify(
-                    subscription['id'],
+                result = stripe.Subscription.modify(
+                    info.subscription_id,
                     cancel_at_period_end = True,
                 )
             else:
-                results = self.stripe.Subscription.delete(subscription['id'])
+                results = stripe.Subscription.delete(info.subscription_id)
         return redirect(self.success_url)
 

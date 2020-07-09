@@ -1,8 +1,10 @@
 import pytz
+import stripe
 
 from datetime import datetime
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from saas.models import StripeInfo
 
 User = get_user_model()
 
@@ -16,13 +18,19 @@ class Customer:
         return Customer(user)
 
     @property
-    def subscribed(self):
+    def info(self):
         try:
-            info = self._user.stripeinfo
-            utc = pytz.UTC 
-            return self._user.is_staff or (info.subscription_end is not None and datetime.now().replace(tzinfo=utc) <= info.subscription_end.replace(tzinfo=utc))
+            return self._user.stripeinfo
         except User.stripeinfo.RelatedObjectDoesNotExist:
+            return None
+
+    @property
+    def subscribed(self):
+        info = self.info
+        if info is None:
             return False
+        utc = pytz.UTC 
+        return self._user.is_staff or (info.subscription_end is not None and datetime.now().replace(tzinfo=utc) <= info.subscription_end.replace(tzinfo=utc))
 
     @property
     def trial_duration_in_seconds(self):
@@ -46,3 +54,4 @@ class Customer:
     @property
     def trial_left_in_days(self):
         return int((self.trial_duration_in_seconds - (datetime.now() - self._user.date_joined).total_seconds()) // (24 * 3600))
+
