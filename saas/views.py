@@ -24,6 +24,8 @@ from saas.subscription import Customer
 
 User = get_user_model()
 
+stripe.api_key = settings.STRIPE_API_KEY
+
 logger = logging.getLogger("saas")
 
 class CsrfExemptMixin(object):
@@ -361,7 +363,7 @@ class SubscriptionView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         info = self.request.user.stripeinfo
-        customer = Customer.stripe().Customer.retrieve(info.customer_id)
+        customer = stripe.Customer.retrieve(info.customer_id)
         card = None
         subscription = None
         if len(customer['sources']['data']) > 0:
