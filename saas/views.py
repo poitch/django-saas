@@ -136,10 +136,12 @@ class StripePortalView(View):
     return_url = reverse_lazy('index')
     def get(self, request, *args, **kwargs):
         info = request.user.stripeinfo
+        url = '{}://{}{}'.format(request.scheme, request.META['HTTP_HOST'], self.return_url)
         session = stripe.billing_portal.Session.create(
             customer= info.customer_id,
-            return_url= self.return_url,
+            return_url=url,
         )
+        print(session)
         return redirect(session['url'])
 
 # Checkout Sequence
