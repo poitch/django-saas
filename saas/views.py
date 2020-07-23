@@ -24,14 +24,9 @@ from saas.subscription import Customer
 
 User = get_user_model()
 
-stripe.api_key = settings.STRIPE_API_KEY
+stripe.api_key = settings.STRIPE_SECRET_KEY
 
 logger = logging.getLogger("saas")
-
-class CsrfExemptMixin(object):
-    @method_decorator(csrf_exempt)
-    def dispatch(self, *args, **kwargs):
-        return super(CsrfExemptMixin, self).dispatch(*args, **kwargs)
 
 
 class RegisterView(FormView):
@@ -106,7 +101,7 @@ class SubscribeView(LoginRequiredMixin, View):
         plans = stripe.Plan.list()
         context = {}
         context['plans'] = plans
-        context['STRIPE_PUBLISHABLE_API_KEY'] = settings.STRIPE_PUBLISHABLE_API_KEY
+        context['STRIPE_PUBLISHABLE_KEY'] = settings.STRIPE_PUBLISHABLE_KEY
         return render(request, self.template_name, context)
 
     def post(self, request, *args, **kwargs):
@@ -137,7 +132,34 @@ class SubscribeView(LoginRequiredMixin, View):
         return redirect(self.success_url)
 
 
-class StripeWebhook(View, CsrfExemptMixin):
+class StripePortalView(View):
+    return_url = reverse_lazy('index')
+    def get(self, request, *args, **kwargs):
+        info = request.user.stripeinfo
+        session = stripe.billing_portal.Session.create(
+            customer= info.customer_id,
+            return_url= self.return_url,
+        )
+        return redirect(session['url'])
+
+# Checkout Sequence
+#   charge.succeeded
+#   checkout.session.completed ()
+#   payment_method.attached
+#   customer.created
+#   customer.subscription.created
+#   invoice.created
+#   invoice.updated
+#   customer.subscription.updated
+#   payment_intent.succeeded
+#   invoice.finalized
+#   customer.updated
+#   invoice.updated
+#   payment_intent.created
+#   invoice.payment_succeeded
+#   invoice.paid
+
+class StripeWebhook(View):
     from_email = None
     # Payment Succeeded
     payment_succeeded_email_template_name = None
@@ -156,6 +178,25 @@ class StripeWebhook(View, CsrfExemptMixin):
     invoice_incoming_subject_template_name = None
     html_invoice_incoming_email_template_name = None
 
+    @method_decorator(csrf_exempt)
+    def dispatch(self, request, *args, **kwargs):
+        return super(StripeWebhook, self).dispatch(request, *args, **kwargs)
+
+    def customer_user_info(self, stripe_object):
+        customer_id = None
+        user = None
+        info = None
+
+        if 'customer' in stripe_object:
+            customer_id = stripe_object['customer']
+            try:
+                info = StripeInfo.objects.get(customer_id=customer_id)
+                user = info.user
+            except StripeInfo.DoesNotExist:
+                pass
+        
+        return customer_id, user, info
+
     def post(self, request):
         payload = request.body
         sig_header = request.META['HTTP_STRIPE_SIGNATURE']
@@ -169,35 +210,62 @@ class StripeWebhook(View, CsrfExemptMixin):
             )
         except ValueError as e:
             # Invalid payload
+            logger.warn(f'ValueError {e}')
             return HttpResponse(status=400)
         except stripe.error.SignatureVerificationError as e:
             # Invalid signature
+            logger.warn(f'SignatureVerificationError {e}')
             return HttpResponse(status=400)
 
         stripe_object = event['data']['object']
-        customer_id = None
-        user = None
-        info = None
-
-        if 'customer' in stripe_object:
-            customer_id = stripe_object['customer']
-            try:
-                info = StripeInfo.objects.get(customer_id=customer_id)
-                user = info.user
-            except StripeInfo.DoesNotExist:
-                # Ignore the event
-                logger.warn('Ignoring StripeEvent for unknown customer {}'.format(customer_id))
-                return HttpResponse(status=200)
 
         # Record Event
         StripeEvent.objects.create(
             event=event['type'],
             object=stripe_object,
-            customer_id=customer_id,
-            user=user,
         )
+        if event['type'] == 'customer.created':
+            # This event could happen when using CHECKOUT as customers are created automatically.
+            subscription = None
+            if len(stripe_object['subscriptions']['data']) > 0:
+                subscription = stripe_object['subscriptions']['data'][0]
 
-        if event['type'] == 'invoice.payment_succeeded':
+            try:
+                info = StripeInfo.objects.get(customer_id=stripe_object['id'])
+                # Update subscription info just in case!
+                info.subscription_id = subscription['id'] if subscription is not None else None
+                info.subscription_end = datetime.fromtimestamp(
+                            int(subscription['current_period_end'])) if subscription is not None else None
+                info.save()
+            except StripeInfo.DoesNotExist:
+                # No StripeInfo for this customer_id yet, lookup user by corresponding email.
+                try:
+                    user = User.objects.get(email=stripe_object['email'])
+                    # In case SAAS_USE_CHECKOUT settings was flipped, checked whether info already exists.
+                    try:
+                        info = user.stripeinfo
+                        # Looks like we already had a customer created for this email, so overwrite with most recent info
+                        info.customer_id = stripe_object['id']
+                        info.subscription_id = subscription['id'] if subscription is not None else None
+                        info.subscription_end = datetime.fromtimestamp(
+                                int(subscription['current_period_end'])) if subscription is not None else None
+                        info.save()
+                    except User.stripeinfo.RelatedObjectDoesNotExist:
+                        # Brand new customer, create a StripeInfo with what we need
+                        info = StripeInfo.objects.create(
+                            user=user,
+                            customer_id=stripe_object['id'],
+                            subscription_id = subscription['id'] if subscription is not None else None,
+                            subscription_end = datetime.fromtimestamp(
+                                int(subscription['current_period_end'])) if subscription is not None else None,
+                        )
+                except User.DoesNotExist:
+                    # Could not find a user with this email, this could happen in development mode
+                    pass
+        elif event['type'] == 'checkout.session.completed':
+            pass
+        elif event['type'] == 'invoice.payment_succeeded':
+            _, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
                 billing = BillingEvent.objects.create(
                     user=user,
@@ -208,6 +276,7 @@ class StripeWebhook(View, CsrfExemptMixin):
                     self.on_payment_succeeded(
                         request, user, billing, stripe_object)
         elif event['type'] == 'invoice.payment_failed':
+            _, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
                 billing = BillingEvent.objects.create(
                     user=user,
@@ -216,12 +285,15 @@ class StripeWebhook(View, CsrfExemptMixin):
                 )
                 self.on_payment_failed(request, user, billing, stripe_object)
         elif event['type'] == 'invoice.payment_action_required':
+            _, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
                 self.on_payment_action_required(request, user, stripe_object)
         elif event['type'] == 'invoice.incoming':
+            _, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
                 self.on_invoice_incoming(request, user, stripe_object)
         elif event['type'] == 'customer.subscription.updated':
+            _, _, info = self.customer_user_info(stripe_object)
             if info is not None:
                 info.subscription_id = stripe_object['id']
                 info.subscription_end = stripe_object['current_period_end']
@@ -230,12 +302,13 @@ class StripeWebhook(View, CsrfExemptMixin):
             # TODO send an email
             pass
         elif event['type'] == 'customer.subscription.deleted':
-            # Need to update user
+            _, _, info = self.customer_user_info(stripe_object)
             if info is not None:
                 info.subscription_id = None
                 info.subscription_end = None
                 info.save()
         elif event['type'] == 'customer.subscription.created':
+            _, _, info = self.customer_user_info(stripe_object)
             if info is not None:
                 info.subscription_id = stripe_object['id']
                 info.subscription_end = stripe_object['current_period_end']
@@ -252,7 +325,6 @@ class StripeWebhook(View, CsrfExemptMixin):
             'billing': billing,
             'payment': stripe_object,
             'protocol': request.scheme,
-            'username': self.cleaned_data.get('username'),
             'domain': request.META['HTTP_HOST'],
         }
         send_multi_mail(self.payment_succeeded_subject_template_name, self.payment_succeeded_email_template_name, context,
@@ -267,7 +339,6 @@ class StripeWebhook(View, CsrfExemptMixin):
             'billing': billing,
             'payment': stripe_object,
             'protocol': request.scheme,
-            'username': self.cleaned_data.get('username'),
             'domain': request.META['HTTP_HOST'],
         }
         send_multi_mail(self.payment_failed_subject_template_name, self.payment_failed_email_template_name, context,
@@ -281,7 +352,6 @@ class StripeWebhook(View, CsrfExemptMixin):
             'user': user,
             'payment': stripe_object,
             'protocol': request.scheme,
-            'username': self.cleaned_data.get('username'),
             'domain': request.META['HTTP_HOST'],
         }
         send_multi_mail(self.payment_action_required_subject_template_name, self.payment_action_required_email_template_name, context,
@@ -295,7 +365,6 @@ class StripeWebhook(View, CsrfExemptMixin):
             'user': user,
             'payment': stripe_object,
             'protocol': request.scheme,
-            'username': self.cleaned_data.get('username'),
             'domain': request.META['HTTP_HOST'],
         }
         send_multi_mail(self.invoice_incoming_subject_template_name, self.invoice_incoming_email_template_name, context,
@@ -322,7 +391,7 @@ class UpdatePaymentView(LoginRequiredMixin, View):
 
     def get(self, request, *args, **kwargs):
         context = {}
-        context['STRIPE_PUBLISHABLE_API_KEY'] = settings.STRIPE_PUBLISHABLE_API_KEY
+        context['STRIPE_PUBLISHABLE_KEY'] = settings.STRIPE_PUBLISHABLE_KEY
         return render(request, self.template_name, context)
 
     def post(self, request, *args, **kwargs):
@@ -343,7 +412,7 @@ class UpdatePlanView(LoginRequiredMixin, View):
 
     def get(self, request, *args, **kwargs):
         context = {}
-        context['STRIPE_PUBLISHABLE_API_KEY'] = settings.STRIPE_PUBLISHABLE_API_KEY
+        context['STRIPE_PUBLISHABLE_KEY'] = settings.STRIPE_PUBLISHABLE_KEY
         return render(request, self.template_name, context)
 
     def post(self, request, *args, **kwargs):

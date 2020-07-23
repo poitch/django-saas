@@ -2,7 +2,7 @@
 <div id="card-errors" role="alert"></div>
 
 <script>
-var stripe = Stripe('{{STRIPE_PUBLISHABLE_API_KEY}}');
+var stripe = Stripe('{{STRIPE_PUBLISHABLE_KEY}}');
 var elements = stripe.elements();
 var card = elements.create('card');
 

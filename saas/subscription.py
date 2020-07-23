@@ -35,7 +35,7 @@ class Customer:
     @property
     def trial_duration_in_seconds(self):
         days = settings.SAAS_TRIAL_DAYS if hasattr(settings, 'SAAS_TRIAL_DAYS') else 30
-        return days * 24 * 3600
+        return (1 + days) * 24 * 3600
 
     @property
     def trialing(self):

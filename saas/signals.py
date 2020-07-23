@@ -15,6 +15,9 @@ logger = logging.getLogger("saas")
 @receiver(post_save, sender=User)
 def on_new_user(sender, instance, created, **kwargs):
     if created:
+        # Do not create a customer when using CHECKOUT
+        if hasattr(settings, 'SAAS_USE_CHECKOUT') and settings.SAAS_USE_CHECKOUT:
+            return
         # Create a Stripe Customer and store customer id
         customer = None
         subscription = None
