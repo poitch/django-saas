@@ -33,6 +33,13 @@ class Customer:
         return self._user.is_staff or (info.subscription_end is not None and datetime.now().replace(tzinfo=utc) <= info.subscription_end.replace(tzinfo=utc))
 
     @property
+    def previously_subscribed(self):
+        info = self.info
+        if info is None:
+            return False
+        return info.previously_subscribed
+
+    @property
     def trial_duration_in_seconds(self):
         days = settings.SAAS_TRIAL_DAYS if hasattr(settings, 'SAAS_TRIAL_DAYS') else 30
         return (1 + days) * 24 * 3600
@@ -41,8 +48,7 @@ class Customer:
     def trialing(self):
         if self.subscribed:
             return False
-        info = self.info
-        if info is not None and info.previously_subscribed:
+        if self.previously_subscribed:
             return False
         enable_trial = settings.SAAS_ENABLE_TRIAL if hasattr(settings, 'SAAS_ENABLE_TRIAL') else True
         if not settings.SAAS_ENABLE_TRIAL:
