@@ -179,6 +179,10 @@ class StripeWebhook(View):
     invoice_incoming_email_template_name = None
     invoice_incoming_subject_template_name = None
     html_invoice_incoming_email_template_name = None
+    # Trial Will End
+    trial_will_end_email_template_name = None
+    trial_will_end_subject_template_name = None
+    html_trial_will_end_email_template_name = None
 
     @method_decorator(csrf_exempt)
     def dispatch(self, request, *args, **kwargs):
@@ -226,46 +230,17 @@ class StripeWebhook(View):
             event=event['type'],
             object=stripe_object,
         )
-        if event['type'] == 'customer.created':
+        if event['type'] == 'customer.created' or event['type'] == 'customer.updated':
             # This event could happen when using CHECKOUT as customers are created automatically.
-            subscription = None
-            if len(stripe_object['subscriptions']['data']) > 0:
-                subscription = stripe_object['subscriptions']['data'][0]
-
-            try:
-                info = StripeInfo.objects.get(customer_id=stripe_object['id'])
-                # Update subscription info just in case!
-                info.subscription_id = subscription['id'] if subscription is not None else None
-                info.subscription_end = datetime.fromtimestamp(
-                            int(subscription['current_period_end'])) if subscription is not None else None
+            # Or when subscription is cancelled through Portal.
+            StripeInfo.sync_with_customer(stripe_object)
+        elif event['type'] == 'customer.subscription.deleted':
+            _, _, info = self.customer_user_info(stripe_object)
+            if info is not None:
+                info.previously_subscribed = True
+                info.subscription_id = None
+                info.subscription_end = None
                 info.save()
-            except StripeInfo.DoesNotExist:
-                # No StripeInfo for this customer_id yet, lookup user by corresponding email.
-                try:
-                    user = User.objects.get(email=stripe_object['email'])
-                    # In case SAAS_USE_CHECKOUT settings was flipped, checked whether info already exists.
-                    try:
-                        info = user.stripeinfo
-                        # Looks like we already had a customer created for this email, so overwrite with most recent info
-                        info.customer_id = stripe_object['id']
-                        info.subscription_id = subscription['id'] if subscription is not None else None
-                        info.subscription_end = datetime.fromtimestamp(
-                                int(subscription['current_period_end'])) if subscription is not None else None
-                        info.save()
-                    except User.stripeinfo.RelatedObjectDoesNotExist:
-                        # Brand new customer, create a StripeInfo with what we need
-                        info = StripeInfo.objects.create(
-                            user=user,
-                            customer_id=stripe_object['id'],
-                            subscription_id = subscription['id'] if subscription is not None else None,
-                            subscription_end = datetime.fromtimestamp(
-                                int(subscription['current_period_end'])) if subscription is not None else None,
-                        )
-                except User.DoesNotExist:
-                    # Could not find a user with this email, this could happen in development mode
-                    pass
-        elif event['type'] == 'checkout.session.completed':
-            pass
         elif event['type'] == 'invoice.payment_succeeded':
             _, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
@@ -298,11 +273,12 @@ class StripeWebhook(View):
             _, _, info = self.customer_user_info(stripe_object)
             if info is not None:
                 info.subscription_id = stripe_object['id']
-                info.subscription_end = stripe_object['current_period_end']
+                info.subscription_end = datetime.fromtimestamp(int(stripe_object['current_period_end']))
                 info.save()
         elif event['type'] == 'customer.subscription.trial_will_end':
-            # TODO send an email
-            pass
+            _, user, _ = self.customer_user_info(stripe_object)
+            if user is not None:
+                self.on_trial_will_end(request, user, stripe_object)
         elif event['type'] == 'customer.subscription.deleted':
             _, _, info = self.customer_user_info(stripe_object)
             if info is not None:
@@ -313,7 +289,7 @@ class StripeWebhook(View):
             _, _, info = self.customer_user_info(stripe_object)
             if info is not None:
                 info.subscription_id = stripe_object['id']
-                info.subscription_end = stripe_object['current_period_end']
+                info.subscription_end = datetime.fromtimestamp(int(stripe_object['current_period_end']))
                 info.save()
 
         return HttpResponse(status=200)
@@ -365,13 +341,25 @@ class StripeWebhook(View):
         context = {
             'request': request,
             'user': user,
-            'payment': stripe_object,
+            'invoice': stripe_object,
             'protocol': request.scheme,
             'domain': request.META['HTTP_HOST'],
         }
         send_multi_mail(self.invoice_incoming_subject_template_name, self.invoice_incoming_email_template_name, context,
                         self.from_email, user.email, html_email_template_name=self.html_invoice_incoming_email_template_name)
 
+    def on_trial_will_end(self, request, user, stripe_object):
+        if self.trial_will_end_email_template_name is None or self.trial_will_end_subject_template_name is None:
+            return
+        context = {
+            'request': request,
+            'user': user,
+            'trial': stripe_object,
+            'protocol': request.scheme,
+            'domain': request.META['HTTP_HOST'],
+        }
+        send_multi_mail(self.trial_will_end_subject_template_name, self.trial_will_end_email_template_name, context,
+                        self.from_email, user.email, html_email_template_name=self.html_trial_will_end_email_template_name)
 
 class BillingView(View):
     template_name = 'subscription/billing.html'

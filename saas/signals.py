@@ -6,6 +6,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.signals import user_logged_in
 from django.db.models.signals import post_save
+from django.dispatch import receiver
 from saas.models import StripeInfo
 
 User = get_user_model()
@@ -60,19 +61,19 @@ def on_user_login(sender, request, user, **kwargs):
         try:
             customer = stripe.Customer.retrieve(info.customer_id)
             if 'deleted' not in customer:
+                info.delete()
                 return
         except stripe.error.InvalidRequestError:
             return
     except User.stripeinfo.RelatedObjectDoesNotExist:
         return
     
+    subscription = None
     if len(customer['subscriptions']['data']) > 0:
         subscription = customer['subscriptions']['data'][0]
-        subscription_id = subscription['id']
-        subscription_end = datetime.fromtimestamp(
-            int(subscription['current_period_end']))
-        logger.info('Updating Stripe Subscription Information {} {}'.format(subscription_id, subscription_end))
-        info.subscription_id = subscription_id
-        info.subscription_end = subscription_end
-        info.save()
-
+    print('subscription = {}'.format(subscription))
+    info.previously_subscribed = info.previously_subscribed or info.subscription_id is not None
+    info.subscription_id = subscription['id'] if subscription is not None else None
+    info.subscription_end = datetime.fromtimestamp(
+                int(subscription['current_period_end'])) if subscription is not None else None
+    info.save()

@@ -41,6 +41,9 @@ class Customer:
     def trialing(self):
         if self.subscribed:
             return False
+        info = self.info
+        if info is not None and info.previously_subscribed:
+            return False
         enable_trial = settings.SAAS_ENABLE_TRIAL if hasattr(settings, 'SAAS_ENABLE_TRIAL') else True
         if not settings.SAAS_ENABLE_TRIAL:
             return False
