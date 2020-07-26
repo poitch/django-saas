@@ -279,12 +279,6 @@ class StripeWebhook(View):
             _, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
                 self.on_trial_will_end(request, user, stripe_object)
-        elif event['type'] == 'customer.subscription.deleted':
-            _, _, info = self.customer_user_info(stripe_object)
-            if info is not None:
-                info.subscription_id = None
-                info.subscription_end = None
-                info.save()
         elif event['type'] == 'customer.subscription.created':
             _, _, info = self.customer_user_info(stripe_object)
             if info is not None:

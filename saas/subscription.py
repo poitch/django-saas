@@ -26,6 +26,10 @@ class Customer:
 
     @property
     def subscribed(self):
+        return self.trialing or self.actively_subscribed
+
+    @property
+    def actively_subscribed(self):
         info = self.info
         if info is None:
             return False
@@ -46,7 +50,7 @@ class Customer:
 
     @property
     def trialing(self):
-        if self.subscribed:
+        if self.actively_subscribed:
             return False
         if self.previously_subscribed:
             return False
