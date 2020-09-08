@@ -1,5 +1,5 @@
 from django.contrib import admin
-from saas.models import StripeInfo, BillingEvent, StripeEvent
+from saas.models import StripeInfo, BillingEvent, StripeEvent, Acquisition
 
 @admin.register(StripeInfo)
 class StripeInfoAdmin(admin.ModelAdmin):
@@ -12,7 +12,14 @@ class StripeEventAdmin(admin.ModelAdmin):
     ordering = ['-created_at']
     list_display = ['short_id', 'event', 'created_at']
 
+
 @admin.register(BillingEvent)
 class BillingEventAdmin(admin.ModelAdmin):
     ordering = ['-created_at']
     list_display = ['short_id', 'user', 'success', 'created_at']
+
+
+@admin.register(Acquisition)
+class AcquisitionAdmin(admin.ModelAdmin):
+    ordering = ['-created_at']
+    list_display = ['short_id', 'user', 'referer', 'campaing', 'content', 'agent']

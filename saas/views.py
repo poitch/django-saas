@@ -19,7 +19,7 @@ from django.views.generic.base import View, TemplateView
 from django.views.generic.edit import FormView
 from saas.forms import CreateUserForm
 from saas.mailer import send_multi_mail
-from saas.models import StripeInfo, BillingEvent, StripeEvent
+from saas.models import StripeInfo, BillingEvent, StripeEvent, Acquisition
 from saas.subscription import Customer
 
 User = get_user_model()
@@ -52,7 +52,16 @@ class RegisterView(FormView):
             'html_email_template_name': self.html_email_template_name,
             'extra_email_context': self.extra_email_context,
         }
-        form.save(**opts)
+        user = form.save(**opts)
+
+        # acquisition information
+        Acquisition.objects.create(
+            user = user,
+            agent = self.request.headers['User-Agent'],
+            referer = self.request.session.get('referer', None),
+            campaign = self.request.session.get('campaign', None),
+            content = self.request.session.get('content', None),
+        )
 
         messages.success(
             self.request,

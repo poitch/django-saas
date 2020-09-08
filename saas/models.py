@@ -73,6 +73,15 @@ class StripeInfo(BaseModel):
     class Meta:
         verbose_name_plural = "Customers"
 
+
+class Acquisition(BaseModel):
+    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    agent = models.CharField(max_length=1024, default=None, blank=True, null=True)
+    referer = models.CharField(max_length=1024, default=None, blank=True, null=True)
+    campaign = models.CharField(max_length=1024, default=None, blank=True, null=True)
+    content = models.CharField(max_length=1024, default=None, blank=True, null=True)
+
+
 class BillingEvent(BaseModel):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     success = models.BooleanField(default=True)
