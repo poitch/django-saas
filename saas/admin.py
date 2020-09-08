@@ -22,4 +22,4 @@ class BillingEventAdmin(admin.ModelAdmin):
 @admin.register(Acquisition)
 class AcquisitionAdmin(admin.ModelAdmin):
     ordering = ['-created_at']
-    list_display = ['short_id', 'user', 'referer', 'campaing', 'content', 'agent']
+    list_display = ['short_id', 'user', 'referer', 'campaign', 'content', 'agent']
