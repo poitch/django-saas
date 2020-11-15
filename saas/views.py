@@ -1,5 +1,6 @@
 import logging
 import stripe
+import warnings
 
 from datetime import datetime
 from django.conf import settings
@@ -24,7 +25,13 @@ from saas.subscription import Customer
 
 User = get_user_model()
 
-stripe.api_key = settings.STRIPE_SECRET_KEY
+if hasattr(settings, 'STRIPE_SECRET_KEY'):
+    stripe.api_key = settings.STRIPE_SECRET_KEY
+else:
+    warnings.warn('''
+        In order for django-saas to function properly, you need to set STRIPE_SECRET_KEY in settings.py
+    ''')
+
 
 logger = logging.getLogger("saas")
 

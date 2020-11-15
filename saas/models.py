@@ -31,7 +31,7 @@ class StripeInfo(BaseModel):
     @classmethod
     def sync_with_customer(cls, customer):
         subscription = None
-        if len(customer['subscriptions']['data']) > 0:
+        if 'subscriptions' in customer and len(customer['subscriptions']['data']) > 0:
             subscription = customer['subscriptions']['data'][0]
 
         try:
@@ -105,7 +105,7 @@ class BillingEvent(BaseModel):
     @property
     def description(self):
         return self.stripe['lines']['data'][0]['description']
-    
+
     @property
     def currency(self):
         return self.stripe['lines']['data'][0]['currency']
