@@ -216,7 +216,7 @@ class StripeWebhook(View):
                 user = info.user
             except StripeInfo.DoesNotExist:
                 pass
-        
+
         return customer_id, user, info
 
     def post(self, request):
@@ -281,7 +281,7 @@ class StripeWebhook(View):
             _, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
                 self.on_payment_action_required(request, user, stripe_object)
-        elif event['type'] == 'invoice.incoming':
+        elif event['type'] == 'invoice.upcoming':
             _, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
                 self.on_invoice_incoming(request, user, stripe_object)
