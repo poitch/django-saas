@@ -16,6 +16,7 @@ class Customer:
     def __str__(self):
         part1 = 'Subscribed' if self.actively_subscribed else ''
         part2 = 'Trialing' if self.trialing else ''
+        return f'<Customer: {self._user.id} {self._user} {part1}{part2}>'
 
     @classmethod
     def of(cls, user):
