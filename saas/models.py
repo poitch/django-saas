@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 from django.db import models
 from django.contrib.auth import get_user_model
+from django.utils.timezone import make_aware
 
 User = get_user_model()
 
@@ -26,6 +27,7 @@ class StripeInfo(BaseModel):
     customer_id = models.CharField(max_length=256)
     subscription_id = models.CharField(max_length=512, blank=True, null=True)
     subscription_end = models.DateTimeField(blank=True, null=True)
+    plan_id = models.CharField(max_length=512, blank=True, null=True, default=None)
     previously_subscribed = models.BooleanField(default=False)
 
     @classmethod
@@ -38,9 +40,14 @@ class StripeInfo(BaseModel):
             info = StripeInfo.objects.get(customer_id=customer['id'])
             # Update subscription info just in case!
             info.previously_subscribed = info.previously_subscribed or info.subscription_id is not None
-            info.subscription_id = subscription['id'] if subscription is not None else None
-            info.subscription_end = datetime.fromtimestamp(
-                        int(subscription['current_period_end'])) if subscription is not None else None
+            if subscription is not None:
+                info.subscription_id = subscription['id']
+                info.subscription_end = make_aware(datetime.fromtimestamp(int(subscription['current_period_end'])))
+                info.plan_id = subscription['plan']['id']
+            else:
+                info.subscription_end = None
+                info.subscription_end = None
+                info.plan_id = None
             info.save()
         except StripeInfo.DoesNotExist:
             # No StripeInfo for this customer_id yet, lookup user by corresponding email.
@@ -52,9 +59,14 @@ class StripeInfo(BaseModel):
                     # Looks like we already had a customer created for this email, so overwrite with most recent info
                     info.customer_id = customer['id']
                     info.previously_subscribed = info.previously_subscribed or info.subscription_id is not None
-                    info.subscription_id = subscription['id'] if subscription is not None else None
-                    info.subscription_end = datetime.fromtimestamp(
-                            int(subscription['current_period_end'])) if subscription is not None else None
+                    if subscription is not None:
+                        info.subscription_id = subscription['id']
+                        info.subscription_end = make_aware(datetime.fromtimestamp(int(subscription['current_period_end'])))
+                        info.plan_id = subscription['plan']['id']
+                    else:
+                        info.subscription_id = None
+                        info.subscription_end = None
+                        info.plan_id = None
                     info.save()
                 except User.stripeinfo.RelatedObjectDoesNotExist:
                     # Brand new customer, create a StripeInfo with what we need
@@ -62,8 +74,9 @@ class StripeInfo(BaseModel):
                         user=user,
                         customer_id=customer['id'],
                         subscription_id = subscription['id'] if subscription is not None else None,
-                        subscription_end = datetime.fromtimestamp(
-                            int(subscription['current_period_end'])) if subscription is not None else None,
+                        subscription_end = make_aware(datetime.fromtimestamp(
+                            int(subscription['current_period_end']))) if subscription is not None else None,
+                        plan_id = subscription['plan']['id'] if subscription is not None else None,
                     )
             except User.DoesNotExist:
                 # Could not find a user with this email, this could happen in development mode

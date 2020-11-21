@@ -15,6 +15,7 @@ from django.utils.decorators import method_decorator
 from django.utils.encoding import force_text
 from django.utils.http import urlsafe_base64_decode
 from django.utils.translation import gettext_lazy as _
+from django.utils.timezone import make_aware
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic.base import View, TemplateView
 from django.views.generic.edit import FormView
@@ -219,33 +220,7 @@ class StripeWebhook(View):
 
         return customer_id, user, info
 
-    def post(self, request):
-        payload = request.body
-        sig_header = request.META['HTTP_STRIPE_SIGNATURE']
-        event = None
-
-        endpoint_secret = settings.STRIPE_ENDPOINT_SECRET
-
-        try:
-            event = stripe.Webhook.construct_event(
-                payload, sig_header, endpoint_secret
-            )
-        except ValueError as e:
-            # Invalid payload
-            logger.warn(f'ValueError {e}')
-            return HttpResponse(status=400)
-        except stripe.error.SignatureVerificationError as e:
-            # Invalid signature
-            logger.warn(f'SignatureVerificationError {e}')
-            return HttpResponse(status=400)
-
-        stripe_object = event['data']['object']
-
-        # Record Event
-        StripeEvent.objects.create(
-            event=event['type'],
-            object=stripe_object,
-        )
+    def handle_stripe_event(self, request, event, stripe_object):
         if event['type'] == 'customer.created' or event['type'] == 'customer.updated':
             # This event could happen when using CHECKOUT as customers are created automatically.
             # Or when subscription is cancelled through Portal.
@@ -256,6 +231,7 @@ class StripeWebhook(View):
                 info.previously_subscribed = True
                 info.subscription_id = None
                 info.subscription_end = None
+                info.plan_id = None
                 info.save()
         elif event['type'] == 'invoice.payment_succeeded':
             _, user, _ = self.customer_user_info(stripe_object)
@@ -289,7 +265,8 @@ class StripeWebhook(View):
             _, _, info = self.customer_user_info(stripe_object)
             if info is not None:
                 info.subscription_id = stripe_object['id']
-                info.subscription_end = datetime.fromtimestamp(int(stripe_object['current_period_end']))
+                info.subscription_end = make_aware(datetime.fromtimestamp(int(stripe_object['current_period_end'])))
+                info.plan_id = stripe_object['plan']['id']
                 info.save()
         elif event['type'] == 'customer.subscription.trial_will_end':
             _, user, _ = self.customer_user_info(stripe_object)
@@ -299,8 +276,39 @@ class StripeWebhook(View):
             _, _, info = self.customer_user_info(stripe_object)
             if info is not None:
                 info.subscription_id = stripe_object['id']
-                info.subscription_end = datetime.fromtimestamp(int(stripe_object['current_period_end']))
+                info.subscription_end = make_aware(datetime.fromtimestamp(int(stripe_object['current_period_end'])))
+                info.plan_id = stripe_object['plan']['id']
                 info.save()
+
+    def post(self, request):
+        payload = request.body
+        sig_header = request.META['HTTP_STRIPE_SIGNATURE']
+        event = None
+
+        endpoint_secret = settings.STRIPE_ENDPOINT_SECRET
+
+        try:
+            event = stripe.Webhook.construct_event(
+                payload, sig_header, endpoint_secret
+            )
+        except ValueError as e:
+            # Invalid payload
+            logger.warn(f'ValueError {e}')
+            return HttpResponse(status=400)
+        except stripe.error.SignatureVerificationError as e:
+            # Invalid signature
+            logger.warn(f'SignatureVerificationError {e}')
+            return HttpResponse(status=400)
+
+        stripe_object = event['data']['object']
+
+        # Record Event
+        StripeEvent.objects.create(
+            event=event['type'],
+            object=stripe_object,
+        )
+
+        self.handle_stripe_event(request, event, stripe_object)
 
         return HttpResponse(status=200)
 
@@ -455,11 +463,11 @@ class CancelSubscriptionView(LoginRequiredMixin, View):
         if info.subscription_id is not None:
             cancel_at_period_end = settings.SAAS_CANCEL_SUBSCRIPTION_AT_PERIOD_END if hasattr(settings, 'SAAS_CANCEL_SUBSCRIPTION_AT_PERIOD_END') else False
             if cancel_at_period_end:
-                result = stripe.Subscription.modify(
+                _ = stripe.Subscription.modify(
                     info.subscription_id,
                     cancel_at_period_end = True,
                 )
             else:
-                results = stripe.Subscription.delete(info.subscription_id)
+                _ = stripe.Subscription.delete(info.subscription_id)
         return redirect(self.success_url)
 

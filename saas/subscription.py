@@ -1,4 +1,3 @@
-import pytz
 import stripe
 
 from datetime import datetime
@@ -13,7 +12,11 @@ class Customer:
     def __init__(self, user):
         super().__init__()
         self._user = user
-    
+
+    def __str__(self):
+        part1 = 'Subscribed' if self.actively_subscribed else ''
+        part2 = 'Trialing' if self.trialing else ''
+
     @classmethod
     def of(cls, user):
         return Customer(user)
@@ -34,8 +37,7 @@ class Customer:
         info = self.info
         if info is None:
             return False
-        utc = pytz.UTC 
-        return self._user.is_staff or (info.subscription_end is not None and timezone.now().replace(tzinfo=utc) <= info.subscription_end.replace(tzinfo=utc))
+        return self._user.is_staff or (info.subscription_end is not None and timezone.now() <= info.subscription_end)
 
     @property
     def previously_subscribed(self):
@@ -56,11 +58,11 @@ class Customer:
         if self.previously_subscribed:
             return False
         enable_trial = settings.SAAS_ENABLE_TRIAL if hasattr(settings, 'SAAS_ENABLE_TRIAL') else True
-        if not settings.SAAS_ENABLE_TRIAL:
+        if not enable_trial:
             return False
         delta = timezone.now() - self._user.date_joined
         return delta.total_seconds() < self.trial_duration_in_seconds
-    
+
     @property
     def trial_left_in_seconds(self):
         return self.trial_duration_in_seconds - (timezone.now() - self._user.date_joined).total_seconds()
