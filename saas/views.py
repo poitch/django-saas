@@ -440,7 +440,7 @@ class SubscriptionView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         info = self.request.user.stripeinfo
-        customer = stripe.Customer.retrieve(info.customer_id)
+        customer = stripe.Customer.retrieve(info.customer_id, expand=['subscriptions'])
         card = None
         subscription = None
         if len(customer['sources']['data']) > 0:
