@@ -178,7 +178,46 @@ class StripePortalView(View):
 #   invoice.payment_succeeded
 #   invoice.paid
 
-class StripeWebhook(View):
+class StripeView(View):
+    endpoint_secret = None
+
+    @method_decorator(csrf_exempt)
+    def dispatch(self, request, *args, **kwargs):
+        return super(StripeView, self).dispatch(request, *args, **kwargs)
+
+    def handle_stripe_event(self, request, event, stripe_object):
+        pass
+
+    def post(self, request):
+        payload = request.body
+        sig_header = request.META['HTTP_STRIPE_SIGNATURE']
+        event = None
+
+        endpoint_secret = self.endpoint_secret
+        if endpoint_secret is None:
+            endpoint_secret = settings.STRIPE_ENDPOINT_SECRET
+
+        try:
+            event = stripe.Webhook.construct_event(
+                payload, sig_header, endpoint_secret
+            )
+        except ValueError as e:
+            # Invalid payload
+            logger.warn(f'ValueError {e}')
+            return HttpResponse(status=400)
+        except stripe.error.SignatureVerificationError as e:
+            # Invalid signature
+            logger.warn(f'SignatureVerificationError {e}')
+            return HttpResponse(status=400)
+
+        stripe_object = event['data']['object']
+
+        self.handle_stripe_event(request, event, stripe_object)
+
+        return HttpResponse(status=200)
+
+
+class StripeWebhook(StripeView):
     from_email = None
     # Payment Succeeded
     payment_succeeded_email_template_name = None
@@ -201,9 +240,6 @@ class StripeWebhook(View):
     trial_will_end_subject_template_name = None
     html_trial_will_end_email_template_name = None
 
-    @method_decorator(csrf_exempt)
-    def dispatch(self, request, *args, **kwargs):
-        return super(StripeWebhook, self).dispatch(request, *args, **kwargs)
 
     def customer_user_info(self, stripe_object):
         customer_id = None
@@ -221,6 +257,12 @@ class StripeWebhook(View):
         return customer_id, user, info
 
     def handle_stripe_event(self, request, event, stripe_object):
+        # Record Event
+        StripeEvent.objects.create(
+            event=event['type'],
+            object=stripe_object,
+        )
+
         if event['type'] == 'customer.created' or event['type'] == 'customer.updated':
             # This event could happen when using CHECKOUT as customers are created automatically.
             # Or when subscription is cancelled through Portal.
@@ -280,37 +322,6 @@ class StripeWebhook(View):
                 info.plan_id = stripe_object['plan']['id']
                 info.save()
 
-    def post(self, request):
-        payload = request.body
-        sig_header = request.META['HTTP_STRIPE_SIGNATURE']
-        event = None
-
-        endpoint_secret = settings.STRIPE_ENDPOINT_SECRET
-
-        try:
-            event = stripe.Webhook.construct_event(
-                payload, sig_header, endpoint_secret
-            )
-        except ValueError as e:
-            # Invalid payload
-            logger.warn(f'ValueError {e}')
-            return HttpResponse(status=400)
-        except stripe.error.SignatureVerificationError as e:
-            # Invalid signature
-            logger.warn(f'SignatureVerificationError {e}')
-            return HttpResponse(status=400)
-
-        stripe_object = event['data']['object']
-
-        # Record Event
-        StripeEvent.objects.create(
-            event=event['type'],
-            object=stripe_object,
-        )
-
-        self.handle_stripe_event(request, event, stripe_object)
-
-        return HttpResponse(status=200)
 
     def on_payment_succeeded(self, request, user, billing, stripe_object):
         if self.payment_succeeded_email_template_name is None or self.payment_succeeded_subject_template_name is None:
@@ -378,6 +389,9 @@ class StripeWebhook(View):
         }
         send_multi_mail(self.trial_will_end_subject_template_name, self.trial_will_end_email_template_name, context,
                         self.from_email, user.email, html_email_template_name=self.html_trial_will_end_email_template_name)
+
+class StripeHook(StripeWebhook):
+    pass
 
 class BillingView(View):
     template_name = 'subscription/billing.html'
