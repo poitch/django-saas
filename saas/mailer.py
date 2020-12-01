@@ -3,7 +3,8 @@ from django.template.loader import render_to_string
 
 
 def send_multi_mail(subject_template_name, email_template_name,
-                    context, from_email, to_email, html_email_template_name=None, attachments=None):
+                    context, from_email, to_email, html_email_template_name=None,
+                    attachments=None, fail_silently=False):
     """
     Send a django.core.mail.EmailMultiAlternatives to `to_email`.
     """
@@ -20,4 +21,4 @@ def send_multi_mail(subject_template_name, email_template_name,
     if attachments is not None:
         for attachment in attachments:
             email_message.attach(attachment['name'], attachment['content'], attachment['type'])
-    email_message.send()
+    email_message.send(fail_silently)
