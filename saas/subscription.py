@@ -35,10 +35,12 @@ class Customer:
 
     @property
     def actively_subscribed(self):
+        if self._user.is_staff:
+            return True
         info = self.info
         if info is None:
             return False
-        return self._user.is_staff or (info.subscription_end is not None and timezone.now() <= info.subscription_end)
+        return info.subscription_end is not None and timezone.now() <= info.subscription_end
 
     @property
     def previously_subscribed(self):
