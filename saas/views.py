@@ -12,7 +12,10 @@ from django.http import HttpResponse, Http404
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse_lazy
 from django.utils.decorators import method_decorator
-from django.utils.encoding import force_text
+try:
+    from django.utils.encoding import force_text as force_str
+except ImportError:
+    from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from django.utils.translation import gettext_lazy as _
 from django.utils.timezone import make_aware
@@ -89,14 +92,15 @@ class ActivateView(View):
 
     def get(self, request, uidb64, token):
         try:
-            uid = force_text(urlsafe_base64_decode(uidb64))
+            uid = force_str(urlsafe_base64_decode(uidb64))
             user = User.objects.get(pk=uid)
         except (TypeError, ValueError, OverflowError, User.DoesNotExist):
             user = None
         if (user is not None and default_token_generator.check_token(user, token)):
             user.is_active = True
             user.save()
-            login(request, user)
+            # In case there are multiple backends used.
+            login(request, user, settings.AUTHENTICATION_BACKENDS[0])
             messages.add_message(request, messages.INFO,
                                  'Account activated.')
             return redirect(self.success_url)
