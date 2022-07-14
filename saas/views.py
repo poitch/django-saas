@@ -263,7 +263,9 @@ class StripeWebhook(StripeView):
     def handle_stripe_event(self, request, event, stripe_object):
         # Record Event
         StripeEvent.objects.create(
+            event_id=event['id'],
             event=event['type'],
+            object_id=stripe_object['id'],
             object=stripe_object,
         )
 
@@ -272,16 +274,18 @@ class StripeWebhook(StripeView):
             # Or when subscription is cancelled through Portal.
             StripeInfo.sync_with_customer(stripe_object)
         elif event['type'] == 'customer.subscription.deleted':
-            _, _, info = self.customer_user_info(stripe_object)
+            customer, user, info = self.customer_user_info(stripe_object)
             if info is not None:
+                logger.info(f'User {user.id} ({customer}) subscription deleted')
                 info.previously_subscribed = True
                 info.subscription_id = None
                 info.subscription_end = None
                 info.plan_id = None
                 info.save()
         elif event['type'] == 'invoice.payment_succeeded':
-            _, user, _ = self.customer_user_info(stripe_object)
+            customer, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
+                logger.info(f'User {user.id} ({customer}) payment succeeded')
                 billing = BillingEvent.objects.create(
                     user=user,
                     stripe_object=stripe_object,
@@ -291,8 +295,9 @@ class StripeWebhook(StripeView):
                     self.on_payment_succeeded(
                         request, user, billing, stripe_object)
         elif event['type'] == 'invoice.payment_failed':
-            _, user, _ = self.customer_user_info(stripe_object)
+            customer, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
+                logger.info(f'User {user.id} ({customer}) payment failed')
                 billing = BillingEvent.objects.create(
                     user=user,
                     success=False,
@@ -300,30 +305,41 @@ class StripeWebhook(StripeView):
                 )
                 self.on_payment_failed(request, user, billing, stripe_object)
         elif event['type'] == 'invoice.payment_action_required':
-            _, user, _ = self.customer_user_info(stripe_object)
+            customer, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
+                logger.info(f'User {user.id} ({customer}) payment action required')
                 self.on_payment_action_required(request, user, stripe_object)
         elif event['type'] == 'invoice.upcoming':
-            _, user, _ = self.customer_user_info(stripe_object)
+            customer, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
+                logger.info(f'User {user.id} ({customer}) invoice incoming')
                 self.on_invoice_incoming(request, user, stripe_object)
         elif event['type'] == 'customer.subscription.updated':
-            _, _, info = self.customer_user_info(stripe_object)
+            customer, user, info = self.customer_user_info(stripe_object)
             if info is not None:
-                info.subscription_id = stripe_object['id']
-                info.subscription_end = make_aware(datetime.fromtimestamp(int(stripe_object['current_period_end'])))
-                info.plan_id = stripe_object['plan']['id']
+                subscription_id = stripe_object['id']
+                subscription_end = make_aware(datetime.fromtimestamp(int(stripe_object['current_period_end'])))
+                plan_id = stripe_object['plan']['id']
+                logger.info(f'User {user.id} ({customer}) subscription updated ({subscription_id}, {subscription_end}, {plan_id}) => {info.id}')
+                info.subscription_id = subscription_id
+                info.subscription_end = subscription_end
+                info.plan_id = plan_id
                 info.save()
         elif event['type'] == 'customer.subscription.trial_will_end':
-            _, user, _ = self.customer_user_info(stripe_object)
+            customer, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
+                logger.info(f'User {user.id} ({customer}) trial will end')
                 self.on_trial_will_end(request, user, stripe_object)
         elif event['type'] == 'customer.subscription.created':
-            _, _, info = self.customer_user_info(stripe_object)
+            customer, user, info = self.customer_user_info(stripe_object)
             if info is not None:
-                info.subscription_id = stripe_object['id']
-                info.subscription_end = make_aware(datetime.fromtimestamp(int(stripe_object['current_period_end'])))
-                info.plan_id = stripe_object['plan']['id']
+                subscription_id = stripe_object['id']
+                subscription_end = make_aware(datetime.fromtimestamp(int(stripe_object['current_period_end'])))
+                plan_id = stripe_object['plan']['id']
+                logger.info(f'User {user.id} ({customer}) subscription created ({subscription_id}, {subscription_end}, {plan_id}) => {info.id}')
+                info.subscription_id = subscription_id
+                info.subscription_end = subscription_end
+                info.plan_id = plan_id
                 info.save()
 
 

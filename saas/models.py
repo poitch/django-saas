@@ -139,6 +139,8 @@ class BillingEvent(BaseModel):
 class StripeEvent(BaseModel):
     event = models.CharField(max_length=256)
     object = models.TextField()
+    event_id = models.CharField(max_length=256, null=True, blank=True, default=None)
+    object_id = models.CharField(max_length=256, null=True, blank=True, default=None)
 
     class Meta:
         verbose_name_plural = "Events"
