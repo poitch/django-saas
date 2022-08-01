@@ -265,7 +265,7 @@ class StripeWebhook(StripeView):
         StripeEvent.objects.create(
             event_id=event['id'],
             event=event['type'],
-            object_id=stripe_object['id'],
+            object_id=stripe_object['id'] if 'id' in stripe_object else None,
             object=stripe_object,
         )
 
