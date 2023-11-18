@@ -33,22 +33,29 @@ class StripeInfo(BaseModel):
     @classmethod
     def sync_with_customer(cls, customer):
         subscription = None
-        if 'subscriptions' in customer and len(customer['subscriptions']['data']) > 0:
-            subscription = customer['subscriptions']['data'][0]
+        # As of 2022 or so, Stripe doesn't send the subscription info with the stripe event anymore
+        # so we should only update the subscription if we detect the object in the event message
+        # otherwise, this would wipe the subscrpition info
+        has_subscription = False
+        if 'subscriptions' in customer:
+            has_subscription = True
+            if  len(customer['subscriptions']['data']) > 0:
+                subscription = customer['subscriptions']['data'][0]
 
         try:
             info = StripeInfo.objects.get(customer_id=customer['id'])
-            # Update subscription info just in case!
-            info.previously_subscribed = info.previously_subscribed or info.subscription_id is not None
-            if subscription is not None:
-                info.subscription_id = subscription['id']
-                info.subscription_end = make_aware(datetime.fromtimestamp(int(subscription['current_period_end'])))
-                info.plan_id = subscription['plan']['id']
-            else:
-                info.subscription_end = None
-                info.subscription_end = None
-                info.plan_id = None
-            info.save()
+            if has_subscription:
+                # Update subscription info just in case!
+                info.previously_subscribed = info.previously_subscribed or info.subscription_id is not None
+                if subscription is not None:
+                    info.subscription_id = subscription['id']
+                    info.subscription_end = make_aware(datetime.fromtimestamp(int(subscription['current_period_end'])))
+                    info.plan_id = subscription['plan']['id']
+                else:
+                    info.subscription_end = None
+                    info.subscription_end = None
+                    info.plan_id = None
+                info.save()
         except StripeInfo.DoesNotExist:
             # No StripeInfo for this customer_id yet, lookup user by corresponding email.
             try:
@@ -58,15 +65,16 @@ class StripeInfo(BaseModel):
                     info = user.stripeinfo
                     # Looks like we already had a customer created for this email, so overwrite with most recent info
                     info.customer_id = customer['id']
-                    info.previously_subscribed = info.previously_subscribed or info.subscription_id is not None
-                    if subscription is not None:
-                        info.subscription_id = subscription['id']
-                        info.subscription_end = make_aware(datetime.fromtimestamp(int(subscription['current_period_end'])))
-                        info.plan_id = subscription['plan']['id']
-                    else:
-                        info.subscription_id = None
-                        info.subscription_end = None
-                        info.plan_id = None
+                    if has_subscription:
+                        info.previously_subscribed = info.previously_subscribed or info.subscription_id is not None
+                        if subscription is not None:
+                            info.subscription_id = subscription['id']
+                            info.subscription_end = make_aware(datetime.fromtimestamp(int(subscription['current_period_end'])))
+                            info.plan_id = subscription['plan']['id']
+                        else:
+                            info.subscription_id = None
+                            info.subscription_end = None
+                            info.plan_id = None
                     info.save()
                 except User.stripeinfo.RelatedObjectDoesNotExist:
                     # Brand new customer, create a StripeInfo with what we need

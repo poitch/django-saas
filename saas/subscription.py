@@ -1,10 +1,6 @@
-import stripe
-
-from datetime import datetime
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-from saas.models import StripeInfo
 
 User = get_user_model()
 

@@ -182,7 +182,14 @@ class StripePortalView(View):
 #   invoice.payment_succeeded
 #   invoice.paid
 
+
+# 2023 Flow
+# 1/ customer.subscription.updated [THIS WORKS AND UPDATES THE SUBSCRIPTION END PROPERLY]
+# 2/ customer.updated
+# 3/ invoice.payment_succeeded
+
 class StripeView(View):
+
     endpoint_secret = None
 
     @method_decorator(csrf_exempt)
@@ -256,7 +263,9 @@ class StripeWebhook(StripeView):
                 info = StripeInfo.objects.get(customer_id=customer_id)
                 user = info.user
             except StripeInfo.DoesNotExist:
-                pass
+                logger.info(f'Could not find StripeInfo for customer {customer_id}')
+        else:
+            logger.info(f'No customer ID found in stripe event object')
 
         return customer_id, user, info
 
