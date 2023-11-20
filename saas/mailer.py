@@ -1,5 +1,40 @@
+from abc import ABC, abstractmethod
+
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
+from django.contrib.auth import get_user_model
+from django.http import HttpRequest
+
+from saas.models import BillingEvent
+
+User = get_user_model()
+
+class AbstractSaasMailer(ABC):
+    @classmethod
+    @abstractmethod
+    def on_payment_succeeded(cls, request:HttpRequest, user:User, billing:BillingEvent, stripe_object:str):
+         pass
+
+    @classmethod
+    @abstractmethod
+    def on_payment_failed(cls, request:HttpRequest, user:User, billing:BillingEvent, stripe_object:str):
+        pass
+
+    @classmethod
+    @abstractmethod
+    def on_payment_action_required(cls, request:HttpRequest, user:User, stripe_object:str):
+        pass
+
+    @classmethod
+    @abstractmethod
+    def on_invoice_incoming(cls, request:HttpRequest, user:User, stripe_object:str):
+        pass
+
+    @classmethod
+    @abstractmethod
+    def on_trial_vill_end(cls, request:HttpRequest, user:User, stripe_object:str):
+         pass
+
 
 
 def send_multi_mail(subject_template_name, email_template_name,

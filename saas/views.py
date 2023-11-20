@@ -251,6 +251,9 @@ class StripeWebhook(StripeView):
     trial_will_end_subject_template_name = None
     html_trial_will_end_email_template_name = None
 
+    # Mailer Overwrite
+    mailer = None
+
 
     def customer_user_info(self, stripe_object):
         customer_id = None
@@ -353,6 +356,10 @@ class StripeWebhook(StripeView):
 
 
     def on_payment_succeeded(self, request, user, billing, stripe_object):
+        if self.mailer is not None:
+            self.mailer.on_payment_succeeded(request, user, billing, stripe_object)
+            return
+
         if self.payment_succeeded_email_template_name is None or self.payment_succeeded_subject_template_name is None:
             return
         context = {
@@ -367,6 +374,10 @@ class StripeWebhook(StripeView):
                         self.from_email, user.email, html_email_template_name=self.html_payment_succeeded_email_template_name)
 
     def on_payment_failed(self, request, user, billing, stripe_object):
+        if self.mailer is not None:
+            self.mailer.on_payment_failed(request, user, billing, stripe_object)
+            return
+
         if self.payment_failed_email_template_name is None or self.payment_failed_subject_template_name is None:
             return
         context = {
@@ -381,6 +392,10 @@ class StripeWebhook(StripeView):
                         self.from_email, user.email, html_email_template_name=self.html_payment_failed_email_template_name)
 
     def on_payment_action_required(self, request, user, stripe_object):
+        if self.mailer is not None:
+            self.mailer.on_payment_action_required(request, user, stripe_object)
+            return
+        
         if self.payment_action_required_email_template_name is None or self.payment_action_required_subject_template_name is None:
             return
         context = {
@@ -394,6 +409,10 @@ class StripeWebhook(StripeView):
                         self.from_email, user.email, html_email_template_name=self.html_payment_action_required_email_template_name)
 
     def on_invoice_incoming(self, request, user, stripe_object):
+        if self.mailer is not None:
+            self.mailer.on_invoice_incoming(request, user, stripe_object)
+            return
+        
         if self.invoice_incoming_email_template_name is None or self.invoice_incoming_subject_template_name is None:
             return
         context = {
@@ -407,6 +426,10 @@ class StripeWebhook(StripeView):
                         self.from_email, user.email, html_email_template_name=self.html_invoice_incoming_email_template_name)
 
     def on_trial_will_end(self, request, user, stripe_object):
+        if self.mailer is not None:
+            self.mailer.on_trial_vill_end(request, user, stripe_object)
+            return
+        
         if self.trial_will_end_email_template_name is None or self.trial_will_end_subject_template_name is None:
             return
         context = {
