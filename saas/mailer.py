@@ -35,6 +35,10 @@ class AbstractSaasMailer(ABC):
     def on_trial_vill_end(cls, request:HttpRequest, user:User, stripe_object:str):
          pass
 
+    @classmethod
+    @abstractmethod
+    def on_activating(cls, request:HttpRequest, user:User, uid: str, token: str):
+        pass
 
 
 def send_multi_mail(subject_template_name, email_template_name,

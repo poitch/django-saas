@@ -12,6 +12,7 @@ from django.http import HttpResponse, Http404
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse_lazy
 from django.utils.decorators import method_decorator
+
 try:
     from django.utils.encoding import force_text as force_str
 except ImportError:
@@ -29,66 +30,72 @@ from saas.subscription import Customer
 
 User = get_user_model()
 
-if hasattr(settings, 'STRIPE_SECRET_KEY'):
+if hasattr(settings, "STRIPE_SECRET_KEY"):
     stripe.api_key = settings.STRIPE_SECRET_KEY
 else:
-    warnings.warn('''
+    warnings.warn(
+        """
         In order for django-saas to function properly, you need to set STRIPE_SECRET_KEY in settings.py
-    ''')
+    """
+    )
 
 
 logger = logging.getLogger("saas")
 
 
 class RegisterView(FormView):
-    email_template_name = 'registration/activation_email.txt'
-    extra_email_context = None
+    email_template_name = "registration/activation_email.txt"
+    extra_email_context = {}
     form_class = CreateUserForm
     from_email = None
     html_email_template_name = None
-    subject_template_name = 'registration/activation_subject.txt'
-    success_url = reverse_lazy('activating')
-    template_name = 'contact.html'
-    title = _('Register')
+    subject_template_name = "registration/activation_subject.txt"
+    success_url = reverse_lazy("activating")
+    template_name = "contact.html"
+    title = _("Register")
     token_generator = default_token_generator
+    mailer = None
 
     def form_valid(self, form):
         opts = {
-            'use_https': self.request.is_secure(),
-            'token_generator': self.token_generator,
-            'from_email': self.from_email,
-            'email_template_name': self.email_template_name,
-            'subject_template_name': self.subject_template_name,
-            'request': self.request,
-            'html_email_template_name': self.html_email_template_name,
-            'extra_email_context': self.extra_email_context,
+            "commit": True,
+            "use_https": self.request.is_secure(),
+            "token_generator": self.token_generator,
+            "from_email": self.from_email,
+            "email_template_name": self.email_template_name,
+            "subject_template_name": self.subject_template_name,
+            "request": self.request,
+            "html_email_template_name": self.html_email_template_name,
+            "extra_email_context": self.extra_email_context,
+            "mailer": self.mailer,
         }
         user = form.save(**opts)
 
         # acquisition information
         Acquisition.objects.create(
-            user = user,
-            agent = self.request.headers['User-Agent'],
-            referer = self.request.session.get('referer', None),
-            campaign = self.request.session.get('campaign', None),
-            content = self.request.session.get('content', None),
+            user=user,
+            agent=self.request.headers["User-Agent"],
+            referer=self.request.session.get("referer", None),
+            campaign=self.request.session.get("campaign", None),
+            content=self.request.session.get("content", None),
         )
 
         messages.success(
             self.request,
-            'Account was created successfully. Please, check your email to continue the registration process.')
+            "Account was created successfully. Please, check your email to continue the registration process.",
+        )
 
         return super().form_valid(form)
 
 
 class ActivatingView(TemplateView):
-    template_name = 'registration/activating.html'
+    template_name = "registration/activating.html"
 
 
 class ActivateView(View):
-    success_url = reverse_lazy('index')
-    failure_url = reverse_lazy('login')
-    expired_token_template_name = 'registration/activating.html'
+    success_url = reverse_lazy("index")
+    failure_url = reverse_lazy("login")
+    expired_token_template_name = "registration/activating.html"
 
     def get(self, request, uidb64, token):
         try:
@@ -96,37 +103,37 @@ class ActivateView(View):
             user = User.objects.get(pk=uid)
         except (TypeError, ValueError, OverflowError, User.DoesNotExist):
             user = None
-        if (user is not None and default_token_generator.check_token(user, token)):
+        if user is not None and default_token_generator.check_token(user, token):
             user.is_active = True
             user.save()
             # In case there are multiple backends used.
             login(request, user, settings.AUTHENTICATION_BACKENDS[0])
-            messages.add_message(request, messages.INFO,
-                                 'Account activated.')
+            messages.add_message(request, messages.INFO, "Account activated.")
             return redirect(self.success_url)
         else:
             messages.add_message(
                 request,
                 messages.WARNING,
-                'Link Expired. Contact admin to activate your account.')
+                "Link Expired. Contact admin to activate your account.",
+            )
             return render(request, self.expired_token_template_name)
 
         return redirect(self.failure_url)
 
 
 class SubscribeView(LoginRequiredMixin, View):
-    template_name = 'subscription/subscribe.html'
-    success_url = reverse_lazy('index')
+    template_name = "subscription/subscribe.html"
+    success_url = reverse_lazy("index")
 
     def get(self, request, *args, **kwargs):
         plans = stripe.Plan.list()
         context = {}
-        context['plans'] = plans
-        context['STRIPE_PUBLISHABLE_KEY'] = settings.STRIPE_PUBLISHABLE_KEY
+        context["plans"] = plans
+        context["STRIPE_PUBLISHABLE_KEY"] = settings.STRIPE_PUBLISHABLE_KEY
         return render(request, self.template_name, context)
 
     def post(self, request, *args, **kwargs):
-        token = request.POST.get('stripeToken', None)
+        token = request.POST.get("stripeToken", None)
         info = request.user.stripeinfo
         # Set default payment method
         customer = stripe.Customer.modify(
@@ -139,31 +146,36 @@ class SubscribeView(LoginRequiredMixin, View):
             trial_from_plan=True,
             items=[
                 {
-                    "plan": request.POST.get('plan'),
+                    "plan": request.POST.get("plan"),
                 }
             ],
-            expand=['latest_invoice.payment_intent'],
+            expand=["latest_invoice.payment_intent"],
         )
         # Update subscription information
-        info.subscription_id = subscription['id']
+        info.subscription_id = subscription["id"]
         info.subscription_end = datetime.fromtimestamp(
-            int(subscription['current_period_end']))
+            int(subscription["current_period_end"])
+        )
         info.save()
 
         return redirect(self.success_url)
 
 
 class StripePortalView(View):
-    return_url = reverse_lazy('index')
+    return_url = reverse_lazy("index")
+
     def get(self, request, *args, **kwargs):
         info = request.user.stripeinfo
-        url = '{}://{}{}'.format(request.scheme, request.META['HTTP_HOST'], self.return_url)
+        url = "{}://{}{}".format(
+            request.scheme, request.META["HTTP_HOST"], self.return_url
+        )
         session = stripe.billing_portal.Session.create(
-            customer= info.customer_id,
+            customer=info.customer_id,
             return_url=url,
         )
         print(session)
-        return redirect(session['url'])
+        return redirect(session["url"])
+
 
 # Checkout Sequence
 #   charge.succeeded
@@ -188,8 +200,8 @@ class StripePortalView(View):
 # 2/ customer.updated
 # 3/ invoice.payment_succeeded
 
-class StripeView(View):
 
+class StripeView(View):
     endpoint_secret = None
 
     @method_decorator(csrf_exempt)
@@ -201,7 +213,7 @@ class StripeView(View):
 
     def post(self, request):
         payload = request.body
-        sig_header = request.META['HTTP_STRIPE_SIGNATURE']
+        sig_header = request.META["HTTP_STRIPE_SIGNATURE"]
         event = None
 
         endpoint_secret = self.endpoint_secret
@@ -210,18 +222,24 @@ class StripeView(View):
 
         try:
             event = stripe.Webhook.construct_event(
-                payload, sig_header, endpoint_secret
+                payload,
+                sig_header,
+                endpoint_secret,
             )
         except ValueError as e:
             # Invalid payload
-            logger.warn(f'ValueError {e}')
+            logger.warn(f"ValueError {e}")
             return HttpResponse(status=400)
         except stripe.error.SignatureVerificationError as e:
             # Invalid signature
-            logger.warn(f'SignatureVerificationError {e}')
+            logger.warn(f"SignatureVerificationError {e}")
+            if settings.DEBUG:
+                logger.debug(f'HTTP_STRIPE_SIGNATURE: {sig_header}')
+                logger.debug(f'WEBHOOK_SIGNING_SECRET : {endpoint_secret}')
+
             return HttpResponse(status=400)
 
-        stripe_object = event['data']['object']
+        stripe_object = event["data"]["object"]
 
         self.handle_stripe_event(request, event, stripe_object)
 
@@ -254,199 +272,254 @@ class StripeWebhook(StripeView):
     # Mailer Overwrite
     mailer = None
 
-
     def customer_user_info(self, stripe_object):
         customer_id = None
         user = None
         info = None
 
-        if 'customer' in stripe_object:
-            customer_id = stripe_object['customer']
+        if "customer" in stripe_object:
+            customer_id = stripe_object["customer"]
             try:
                 info = StripeInfo.objects.get(customer_id=customer_id)
                 user = info.user
             except StripeInfo.DoesNotExist:
-                logger.info(f'Could not find StripeInfo for customer {customer_id}')
+                logger.info(f"Could not find StripeInfo for customer {customer_id}")
         else:
-            logger.info(f'No customer ID found in stripe event object')
+            logger.info(f"No customer ID found in stripe event object")
 
         return customer_id, user, info
 
     def handle_stripe_event(self, request, event, stripe_object):
         # Record Event
         StripeEvent.objects.create(
-            event_id=event['id'],
-            event=event['type'],
-            object_id=stripe_object['id'] if 'id' in stripe_object else None,
+            event_id=event["id"],
+            event=event["type"],
+            object_id=stripe_object["id"] if "id" in stripe_object else None,
             object=stripe_object,
         )
 
-        if event['type'] == 'customer.created' or event['type'] == 'customer.updated':
+        if event["type"] == "customer.created" or event["type"] == "customer.updated":
             # This event could happen when using CHECKOUT as customers are created automatically.
             # Or when subscription is cancelled through Portal.
             StripeInfo.sync_with_customer(stripe_object)
-        elif event['type'] == 'customer.subscription.deleted':
+        elif event["type"] == "customer.subscription.deleted":
             customer, user, info = self.customer_user_info(stripe_object)
             if info is not None:
-                logger.info(f'User {user.id} ({customer}) subscription deleted')
+                logger.info(f"User {user.id} ({customer}) subscription deleted")
                 info.previously_subscribed = True
                 info.subscription_id = None
                 info.subscription_end = None
                 info.plan_id = None
                 info.save()
-        elif event['type'] == 'invoice.payment_succeeded':
+        elif event["type"] == "invoice.payment_succeeded":
             customer, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
-                logger.info(f'User {user.id} ({customer}) payment succeeded')
+                logger.info(f"User {user.id} ({customer}) payment succeeded")
                 billing = BillingEvent.objects.create(
                     user=user,
                     stripe_object=stripe_object,
                 )
                 # Do not email trial emails where amount_due and amount_paid are both 0
-                if stripe_object['amount_due'] != 0 or stripe_object['amount_paid'] != 0:
-                    self.on_payment_succeeded(
-                        request, user, billing, stripe_object)
-        elif event['type'] == 'invoice.payment_failed':
+                if (
+                    stripe_object["amount_due"] != 0
+                    or stripe_object["amount_paid"] != 0
+                ):
+                    self.on_payment_succeeded(request, user, billing, stripe_object)
+        elif event["type"] == "invoice.payment_failed":
             customer, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
-                logger.info(f'User {user.id} ({customer}) payment failed')
+                logger.info(f"User {user.id} ({customer}) payment failed")
                 billing = BillingEvent.objects.create(
                     user=user,
                     success=False,
                     stripe_object=stripe_object,
                 )
                 self.on_payment_failed(request, user, billing, stripe_object)
-        elif event['type'] == 'invoice.payment_action_required':
+        elif event["type"] == "invoice.payment_action_required":
             customer, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
-                logger.info(f'User {user.id} ({customer}) payment action required')
+                logger.info(f"User {user.id} ({customer}) payment action required")
                 self.on_payment_action_required(request, user, stripe_object)
-        elif event['type'] == 'invoice.upcoming':
+        elif event["type"] == "invoice.upcoming":
             customer, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
-                logger.info(f'User {user.id} ({customer}) invoice incoming')
+                logger.info(f"User {user.id} ({customer}) invoice incoming")
                 self.on_invoice_incoming(request, user, stripe_object)
-        elif event['type'] == 'customer.subscription.updated':
+        elif event["type"] == "customer.subscription.updated":
             customer, user, info = self.customer_user_info(stripe_object)
             if info is not None:
-                subscription_id = stripe_object['id']
-                subscription_end = make_aware(datetime.fromtimestamp(int(stripe_object['current_period_end'])))
-                plan_id = stripe_object['plan']['id']
-                logger.info(f'User {user.id} ({customer}) subscription updated ({subscription_id}, {subscription_end}, {plan_id}) => {info.id}')
+                subscription_id = stripe_object["id"]
+                subscription_end = make_aware(
+                    datetime.fromtimestamp(int(stripe_object["current_period_end"]))
+                )
+                plan_id = stripe_object["plan"]["id"]
+                logger.info(
+                    f"User {user.id} ({customer}) subscription updated ({subscription_id}, {subscription_end}, {plan_id}) => {info.id}"
+                )
                 info.subscription_id = subscription_id
                 info.subscription_end = subscription_end
                 info.plan_id = plan_id
                 info.save()
-        elif event['type'] == 'customer.subscription.trial_will_end':
+        elif event["type"] == "customer.subscription.trial_will_end":
             customer, user, _ = self.customer_user_info(stripe_object)
             if user is not None:
-                logger.info(f'User {user.id} ({customer}) trial will end')
+                logger.info(f"User {user.id} ({customer}) trial will end")
                 self.on_trial_will_end(request, user, stripe_object)
-        elif event['type'] == 'customer.subscription.created':
+        elif event["type"] == "customer.subscription.created":
             customer, user, info = self.customer_user_info(stripe_object)
             if info is not None:
-                subscription_id = stripe_object['id']
-                subscription_end = make_aware(datetime.fromtimestamp(int(stripe_object['current_period_end'])))
-                plan_id = stripe_object['plan']['id']
-                logger.info(f'User {user.id} ({customer}) subscription created ({subscription_id}, {subscription_end}, {plan_id}) => {info.id}')
+                subscription_id = stripe_object["id"]
+                subscription_end = make_aware(
+                    datetime.fromtimestamp(int(stripe_object["current_period_end"]))
+                )
+                plan_id = stripe_object["plan"]["id"]
+                logger.info(
+                    f"User {user.id} ({customer}) subscription created ({subscription_id}, {subscription_end}, {plan_id}) => {info.id}"
+                )
                 info.subscription_id = subscription_id
                 info.subscription_end = subscription_end
                 info.plan_id = plan_id
                 info.save()
-
 
     def on_payment_succeeded(self, request, user, billing, stripe_object):
         if self.mailer is not None:
             self.mailer.on_payment_succeeded(request, user, billing, stripe_object)
             return
 
-        if self.payment_succeeded_email_template_name is None or self.payment_succeeded_subject_template_name is None:
+        if (
+            self.payment_succeeded_email_template_name is None
+            or self.payment_succeeded_subject_template_name is None
+        ):
             return
         context = {
-            'request': request,
-            'user': user,
-            'billing': billing,
-            'payment': stripe_object,
-            'protocol': request.scheme,
-            'domain': request.META['HTTP_HOST'],
+            "request": request,
+            "user": user,
+            "billing": billing,
+            "payment": stripe_object,
+            "protocol": request.scheme,
+            "domain": request.META["HTTP_HOST"],
         }
-        send_multi_mail(self.payment_succeeded_subject_template_name, self.payment_succeeded_email_template_name, context,
-                        self.from_email, user.email, html_email_template_name=self.html_payment_succeeded_email_template_name)
+        send_multi_mail(
+            self.payment_succeeded_subject_template_name,
+            self.payment_succeeded_email_template_name,
+            context,
+            self.from_email,
+            user.email,
+            html_email_template_name=self.html_payment_succeeded_email_template_name,
+        )
 
     def on_payment_failed(self, request, user, billing, stripe_object):
         if self.mailer is not None:
             self.mailer.on_payment_failed(request, user, billing, stripe_object)
             return
 
-        if self.payment_failed_email_template_name is None or self.payment_failed_subject_template_name is None:
+        if (
+            self.payment_failed_email_template_name is None
+            or self.payment_failed_subject_template_name is None
+        ):
             return
         context = {
-            'request': request,
-            'user': user,
-            'billing': billing,
-            'payment': stripe_object,
-            'protocol': request.scheme,
-            'domain': request.META['HTTP_HOST'],
+            "request": request,
+            "user": user,
+            "billing": billing,
+            "payment": stripe_object,
+            "protocol": request.scheme,
+            "domain": request.META["HTTP_HOST"],
         }
-        send_multi_mail(self.payment_failed_subject_template_name, self.payment_failed_email_template_name, context,
-                        self.from_email, user.email, html_email_template_name=self.html_payment_failed_email_template_name)
+        send_multi_mail(
+            self.payment_failed_subject_template_name,
+            self.payment_failed_email_template_name,
+            context,
+            self.from_email,
+            user.email,
+            html_email_template_name=self.html_payment_failed_email_template_name,
+        )
 
     def on_payment_action_required(self, request, user, stripe_object):
         if self.mailer is not None:
             self.mailer.on_payment_action_required(request, user, stripe_object)
             return
-        
-        if self.payment_action_required_email_template_name is None or self.payment_action_required_subject_template_name is None:
+
+        if (
+            self.payment_action_required_email_template_name is None
+            or self.payment_action_required_subject_template_name is None
+        ):
             return
         context = {
-            'request': request,
-            'user': user,
-            'payment': stripe_object,
-            'protocol': request.scheme,
-            'domain': request.META['HTTP_HOST'],
+            "request": request,
+            "user": user,
+            "payment": stripe_object,
+            "protocol": request.scheme,
+            "domain": request.META["HTTP_HOST"],
         }
-        send_multi_mail(self.payment_action_required_subject_template_name, self.payment_action_required_email_template_name, context,
-                        self.from_email, user.email, html_email_template_name=self.html_payment_action_required_email_template_name)
+        send_multi_mail(
+            self.payment_action_required_subject_template_name,
+            self.payment_action_required_email_template_name,
+            context,
+            self.from_email,
+            user.email,
+            html_email_template_name=self.html_payment_action_required_email_template_name,
+        )
 
     def on_invoice_incoming(self, request, user, stripe_object):
         if self.mailer is not None:
             self.mailer.on_invoice_incoming(request, user, stripe_object)
             return
-        
-        if self.invoice_incoming_email_template_name is None or self.invoice_incoming_subject_template_name is None:
+
+        if (
+            self.invoice_incoming_email_template_name is None
+            or self.invoice_incoming_subject_template_name is None
+        ):
             return
         context = {
-            'request': request,
-            'user': user,
-            'invoice': stripe_object,
-            'protocol': request.scheme,
-            'domain': request.META['HTTP_HOST'],
+            "request": request,
+            "user": user,
+            "invoice": stripe_object,
+            "protocol": request.scheme,
+            "domain": request.META["HTTP_HOST"],
         }
-        send_multi_mail(self.invoice_incoming_subject_template_name, self.invoice_incoming_email_template_name, context,
-                        self.from_email, user.email, html_email_template_name=self.html_invoice_incoming_email_template_name)
+        send_multi_mail(
+            self.invoice_incoming_subject_template_name,
+            self.invoice_incoming_email_template_name,
+            context,
+            self.from_email,
+            user.email,
+            html_email_template_name=self.html_invoice_incoming_email_template_name,
+        )
 
     def on_trial_will_end(self, request, user, stripe_object):
         if self.mailer is not None:
             self.mailer.on_trial_vill_end(request, user, stripe_object)
             return
-        
-        if self.trial_will_end_email_template_name is None or self.trial_will_end_subject_template_name is None:
+
+        if (
+            self.trial_will_end_email_template_name is None
+            or self.trial_will_end_subject_template_name is None
+        ):
             return
         context = {
-            'request': request,
-            'user': user,
-            'trial': stripe_object,
-            'protocol': request.scheme,
-            'domain': request.META['HTTP_HOST'],
+            "request": request,
+            "user": user,
+            "trial": stripe_object,
+            "protocol": request.scheme,
+            "domain": request.META["HTTP_HOST"],
         }
-        send_multi_mail(self.trial_will_end_subject_template_name, self.trial_will_end_email_template_name, context,
-                        self.from_email, user.email, html_email_template_name=self.html_trial_will_end_email_template_name)
+        send_multi_mail(
+            self.trial_will_end_subject_template_name,
+            self.trial_will_end_email_template_name,
+            context,
+            self.from_email,
+            user.email,
+            html_email_template_name=self.html_trial_will_end_email_template_name,
+        )
+
 
 class StripeHook(StripeWebhook):
     pass
 
+
 class BillingView(View):
-    template_name = 'subscription/billing.html'
+    template_name = "subscription/billing.html"
 
     def get(self, request, billing_id):
         billing = get_object_or_404(BillingEvent, pk=billing_id)
@@ -454,39 +527,39 @@ class BillingView(View):
             raise Http404
 
         context = {}
-        context['billing'] = billing
+        context["billing"] = billing
 
         return render(request, self.template_name, context)
 
 
 class UpdatePaymentView(LoginRequiredMixin, View):
-    template_name = 'subscription/update_payment.html'
-    success_url = reverse_lazy('index')
+    template_name = "subscription/update_payment.html"
+    success_url = reverse_lazy("index")
 
     def get(self, request, *args, **kwargs):
         context = {}
-        context['STRIPE_PUBLISHABLE_KEY'] = settings.STRIPE_PUBLISHABLE_KEY
+        context["STRIPE_PUBLISHABLE_KEY"] = settings.STRIPE_PUBLISHABLE_KEY
         return render(request, self.template_name, context)
 
     def post(self, request, *args, **kwargs):
         info = request.user.stripeinfo
         customer = stripe.Customer.modify(
-            info.customer_id,
-            source=request.POST.get('stripeToken')
+            info.customer_id, source=request.POST.get("stripeToken")
         )
         stripe.Subscription.modify(
             info.subscription_id,
-            default_source=customer['sources']['data'][0]['id'],
+            default_source=customer["sources"]["data"][0]["id"],
         )
         return redirect(self.success_url)
 
+
 class UpdatePlanView(LoginRequiredMixin, View):
-    template_name = 'subscription/update_plan.html'
-    success_url = reverse_lazy('index')
+    template_name = "subscription/update_plan.html"
+    success_url = reverse_lazy("index")
 
     def get(self, request, *args, **kwargs):
         context = {}
-        context['STRIPE_PUBLISHABLE_KEY'] = settings.STRIPE_PUBLISHABLE_KEY
+        context["STRIPE_PUBLISHABLE_KEY"] = settings.STRIPE_PUBLISHABLE_KEY
         return render(request, self.template_name, context)
 
     def post(self, request, *args, **kwargs):
@@ -496,44 +569,51 @@ class UpdatePlanView(LoginRequiredMixin, View):
             cancel_at_period_end=False,
             items=[
                 {
-                    "plan": request.POST.get('plan'),
+                    "plan": request.POST.get("plan"),
                 }
             ],
-            expand=['latest_invoice.payment_intent'],
+            expand=["latest_invoice.payment_intent"],
         )
+
 
 class SubscriptionView(LoginRequiredMixin, TemplateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         info = self.request.user.stripeinfo
-        customer = stripe.Customer.retrieve(info.customer_id, expand=['subscriptions'])
+        customer = stripe.Customer.retrieve(info.customer_id, expand=["subscriptions"])
         card = None
         subscription = None
-        if len(customer['sources']['data']) > 0:
-            card = customer['sources']['data'][0]
-        if len(customer['subscriptions']['data']) > 0:
-            subscription = customer['subscriptions']['data'][0]
-        for billing in BillingEvent.objects.filter(user=self.request.user).order_by('-created_at'):
-            context['billing'].append(billing)
+        if len(customer["sources"]["data"]) > 0:
+            card = customer["sources"]["data"][0]
+        if len(customer["subscriptions"]["data"]) > 0:
+            subscription = customer["subscriptions"]["data"][0]
+        for billing in BillingEvent.objects.filter(user=self.request.user).order_by(
+            "-created_at"
+        ):
+            context["billing"].append(billing)
 
-        context['customer'] = customer
-        context['card'] = card
-        context['subscription'] = subscription
+        context["customer"] = customer
+        context["card"] = card
+        context["subscription"] = subscription
         return context
 
+
 class CancelSubscriptionView(LoginRequiredMixin, View):
-    success_url = reverse_lazy('index')
+    success_url = reverse_lazy("index")
 
     def get(self, request):
         info = request.user.stripeinfo
         if info.subscription_id is not None:
-            cancel_at_period_end = settings.SAAS_CANCEL_SUBSCRIPTION_AT_PERIOD_END if hasattr(settings, 'SAAS_CANCEL_SUBSCRIPTION_AT_PERIOD_END') else False
+            cancel_at_period_end = (
+                settings.SAAS_CANCEL_SUBSCRIPTION_AT_PERIOD_END
+                if hasattr(settings, "SAAS_CANCEL_SUBSCRIPTION_AT_PERIOD_END")
+                else False
+            )
             if cancel_at_period_end:
                 _ = stripe.Subscription.modify(
                     info.subscription_id,
-                    cancel_at_period_end = True,
+                    cancel_at_period_end=True,
                 )
             else:
                 _ = stripe.Subscription.delete(info.subscription_id)
         return redirect(self.success_url)
-
